@@ -1,0 +1,18 @@
+[general]
+name=InVEST
+qgisMinimumVersion=3.34
+qgisMaximumVersion=4.99
+supportsQt6=yes
+hasProcessingProvider=yes
+description=Run InVEST ecosystem service models from the QGIS Processing Toolbox
+about=Exposes every model from the InVEST (Integrated Valuation of Ecosystem Services and Tradeoffs) suite as a QGIS Processing algorithm. Model inputs are entered through standard QGIS parameter widgets and results are loaded straight onto the map canvas. Requires a separate installation of the InVEST Workbench application, whose path is configured in Processing options.
+version=0.1.0
+author=Natural Capital Project
+email=jadoug06@stanford.edu
+category=Analysis
+icon=icons/invest.svg
+homepage=https://naturalcapitalproject.stanford.edu/software/invest
+tracker=https://github.com/natcap/invest/issues
+repository=https://github.com/natcap/invest
+experimental=True
+deprecated=False
