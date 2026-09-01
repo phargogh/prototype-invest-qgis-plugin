@@ -81,9 +81,9 @@ class TestEveryModel(unittest.TestCase):
                     self.assertTrue(record["path"])
                     self.assertFalse(record["path"].startswith("/"))
                     self.assertIn(record["kind"], KNOWN_OUTPUT_KINDS)
-                    self.assertNotEqual(record["path"].split("/")[0],
-                                        normalize.TASKGRAPH_DIR,
-                                        "taskgraph cache must be excluded")
+                    self.assertNotIn(record["path"].split("/")[0],
+                                     normalize.TASKGRAPH_DIRS,
+                                     "taskgraph directories must be excluded")
 
     def test_numeric_bounds_are_consistent(self):
         for version, model_id, raw in iter_models():
@@ -182,8 +182,8 @@ class TestCrossVersionLayouts(unittest.TestCase):
                 paths = {record["path"] for record in spec["outputs"]}
                 self.assertIn("c_storage_bas.tif", paths)
                 self.assertIn("intermediate_outputs/c_above_bas.tif", paths)
-                self.assertFalse(
-                    any(p.startswith(normalize.TASKGRAPH_DIR) for p in paths))
+                self.assertFalse(any(p.split("/")[0] in normalize.TASKGRAPH_DIRS
+                                     for p in paths))
 
     def test_intermediate_flag_matches_directory_nesting(self):
         for version in VERSIONS:
@@ -200,6 +200,52 @@ class TestCrossVersionLayouts(unittest.TestCase):
                 spec = normalize.normalise(load_specs(version)["carbon"])
                 by_path = {r["path"]: r for r in spec["outputs"]}
                 self.assertEqual(by_path["c_storage_bas.tif"]["kind"], "raster")
+
+
+class TestIntermediateClassification(unittest.TestCase):
+    """A results subdirectory must not be mistaken for a working directory.
+
+    InVEST groups outputs one directory deep, but "output/" holds results while
+    "intermediate/" holds working files. Treating every subdirectory as
+    intermediate hid the entire result set of nine models.
+    """
+
+    def test_results_directories_are_not_intermediate(self):
+        for path in ["output/foo.tif", "outputs/foo.tif",
+                     "visualization_outputs/foo.shp",
+                     "outputs_preprocessor/foo.csv"]:
+            with self.subTest(path=path):
+                self.assertFalse(normalize.is_intermediate_path(path))
+
+    def test_working_directories_are_intermediate(self):
+        for path in ["intermediate/foo.tif", "intermediate_outputs/foo.tif",
+                     "intermediate_output/foo.tif", "intermediate_files/foo.tif",
+                     "tmp/foo.tif"]:
+            with self.subTest(path=path):
+                self.assertTrue(normalize.is_intermediate_path(path))
+
+    def test_bare_filenames_are_not_intermediate(self):
+        self.assertFalse(normalize.is_intermediate_path("sed_export.tif"))
+
+    def test_every_model_has_a_loadable_result_by_default(self):
+        """With intermediates off, every model must still put something on the
+        map, otherwise the plugin looks broken for that model."""
+        for version, model_id, raw in iter_models():
+            with self.subTest(version=version, model=model_id):
+                spec = normalize.normalise(raw)
+                loadable = [record for record in spec["outputs"]
+                            if not record["is_intermediate"]
+                            and record["kind"] in ("raster", "vector")]
+                self.assertTrue(
+                    loadable,
+                    f"{model_id} would add nothing to the map by default")
+
+    def test_taskgraph_directories_are_dropped(self):
+        for version, model_id, raw in iter_models():
+            with self.subTest(version=version, model=model_id):
+                for record in normalize.normalise(raw)["outputs"]:
+                    self.assertNotIn(record["path"].split("/")[0],
+                                     normalize.TASKGRAPH_DIRS)
 
 
 class TestDatastack(unittest.TestCase):

@@ -16,9 +16,32 @@ import ast
 import os
 import posixpath
 
-#: Outputs under this top-level directory are taskgraph bookkeeping, never
+#: Outputs under these top-level directories are taskgraph bookkeeping, never
 #: something a user wants on their map.
-TASKGRAPH_DIR = "taskgraph_cache"
+TASKGRAPH_DIRS = frozenset({"taskgraph_cache", "taskgraph_dir"})
+
+#: Directories holding a model's working files rather than its results.
+#: Everything InVEST calls "intermediate" plus its scratch directory; note that
+#: "output", "outputs" and "visualization_outputs" are *results* directories
+#: and must not be treated as intermediate, or models that write everything
+#: into "output/" would appear to produce nothing at all.
+_INTERMEDIATE_DIRS = frozenset({
+    "intermediate", "intermediate_output", "intermediate_outputs",
+    "intermediate_files", "tmp",
+})
+
+
+def is_intermediate_path(path):
+    """Return True when a relative output path is a working file.
+
+    Only the first path component is considered: InVEST groups its outputs one
+    directory deep.
+    """
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return False
+    return parts[0].lower() in _INTERMEDIATE_DIRS
+
 
 RASTER_EXTENSIONS = {".tif", ".tiff", ".img", ".vrt"}
 VECTOR_EXTENSIONS = {".shp", ".gpkg", ".geojson", ".gml", ".kml"}
@@ -116,7 +139,7 @@ def _normalise_output(spec, path):
         "kind": _classify(spec, path),
         "about": spec.get("about") or "",
         "created_if": spec.get("created_if"),
-        "is_intermediate": "/" in path,
+        "is_intermediate": is_intermediate_path(path),
     }
 
 
@@ -160,7 +183,7 @@ def normalise_outputs(raw_outputs):
 
     # Taskgraph's cache is declared in the spec but is never user-facing.
     return [output for output in collected
-            if output["path"].split("/")[0] != TASKGRAPH_DIR]
+            if output["path"].split("/")[0] not in TASKGRAPH_DIRS]
 
 
 def _normalise_input(spec):

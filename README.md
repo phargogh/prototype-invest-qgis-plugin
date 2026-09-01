@@ -73,10 +73,15 @@ Carbon datastack in the 3.13 sample data is from InVEST 3.7 and still says
 in what it can and tells you the rest. The full breakdown goes to the *InVEST*
 tab of the Log Messages panel.
 
-When the run finishes, top-level spatial outputs are added to the map in a
-layer-tree group named after the model. The advanced parameter **Also load
-intermediate outputs onto the map** additionally loads the contents of the
-model's `intermediate_outputs` directory; InVEST writes those files either way.
+When the run finishes, the model's spatial results are added to the map in a
+layer-tree group named after the model.
+
+InVEST organises a workspace one directory deep, and the distinction that
+matters is *which* directory: `output/`, `outputs/` and `visualization_outputs/`
+hold results and are loaded, while `intermediate/`, `intermediate_outputs/` and
+`tmp/` hold working files and are not. The advanced parameter **Also load
+intermediate outputs onto the map** loads those too; InVEST writes them either
+way. The `taskgraph_cache` directory is never loaded.
 
 Non-spatial outputs (summary tables, HTML reports, the run log) are left in the
 workspace folder.
@@ -143,6 +148,11 @@ and 3.20.0.
 
 ## Limitations
 
+- Result and working directories are recognised by name. A future InVEST
+  release introducing a new working-directory name would have its contents
+  loaded as results until that name is added to `_INTERMEDIATE_DIRS` in
+  `normalize.py`. The tests assert that every model contributes at least one
+  layer by default, which catches the more damaging direction of this mistake.
 - Only the macOS Workbench layout has been verified. The Windows and Linux
   executable locations are best-effort guesses.
 - `coastal_vulnerability`'s `slr_field` is a dropdown InVEST computes at run
