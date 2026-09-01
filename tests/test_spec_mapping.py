@@ -9,12 +9,14 @@ Run with:  python3 -m unittest discover -s tests -v
 
 import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from invest_qgis import normalize, outputs, paramspec  # noqa: E402
+from invest_qgis import datastack, normalize, outputs, paramspec  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VERSIONS = ["3.16.2", "3.20.0"]
@@ -198,6 +200,150 @@ class TestCrossVersionLayouts(unittest.TestCase):
                 spec = normalize.normalise(load_specs(version)["carbon"])
                 by_path = {r["path"]: r for r in spec["outputs"]}
                 self.assertEqual(by_path["c_storage_bas.tif"]["kind"], "raster")
+
+
+class TestDatastack(unittest.TestCase):
+    """Loading InVEST parameter-set files onto a model's parameters."""
+
+    SAMPLE_DATA = "/Users/jdouglass/Documents/InVEST 3.13.0 sample data"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _write(self, payload, name="params.invest.json"):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        return path
+
+    def _plans(self, model_id):
+        return paramspec.plan_model(
+            normalize.normalise(load_specs("3.20.0")[model_id])["inputs"])
+
+    # -- reading ------------------------------------------------------------
+
+    def test_reads_modern_and_legacy_and_bare_forms(self):
+        modern = self._write({"model_id": "carbon", "invest_version": "3.20.0",
+                              "args": {"results_suffix": "a"}})
+        self.assertEqual(datastack.read(modern),
+                         ("carbon", {"results_suffix": "a"}, "3.20.0"))
+
+        # Pre-3.14 files carry a Python module path instead of a model id.
+        legacy = self._write({"model_name": "natcap.invest.carbon",
+                              "args": {"results_suffix": "b"}}, "legacy.json")
+        model_id, args, _ = datastack.read(legacy)
+        self.assertEqual(model_id, "carbon")
+        self.assertEqual(args, {"results_suffix": "b"})
+
+        bare = self._write({"results_suffix": "c"}, "bare.json")
+        self.assertEqual(datastack.read(bare)[1], {"results_suffix": "c"})
+
+    def test_unreadable_files_raise_datastack_error(self):
+        broken = os.path.join(self.tmp, "broken.json")
+        with open(broken, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        with self.assertRaises(datastack.DatastackError):
+            datastack.read(broken)
+        with self.assertRaises(datastack.DatastackError):
+            datastack.read(os.path.join(self.tmp, "absent.json"))
+        with self.assertRaises(datastack.DatastackError):
+            datastack.read(self._write({"model_id": "carbon"}, "noargs.json"))
+
+    # -- value translation --------------------------------------------------
+
+    def test_relative_paths_resolve_against_the_datastack(self):
+        raster = os.path.join(self.tmp, "lulc.tif")
+        open(raster, "w").close()
+        result = datastack.to_parameter_values(
+            {"lulc_bas_path": "lulc.tif"}, self._plans("carbon"), self.tmp)
+        self.assertEqual(result["values"]["lulc_bas_path"], raster)
+
+    def test_unresolvable_relative_path_is_kept_verbatim(self):
+        """The user should see what the file asked for, not a rewritten guess."""
+        result = datastack.to_parameter_values(
+            {"lulc_bas_path": "missing.tif"}, self._plans("carbon"), self.tmp)
+        self.assertEqual(result["values"]["lulc_bas_path"], "missing.tif")
+
+    def test_quoted_numbers_are_coerced(self):
+        plans = self._plans("sdr")
+        result = datastack.to_parameter_values(
+            {"sdr_max": "0.8", "threshold_flow_accumulation": "1000"},
+            plans, self.tmp)
+        self.assertEqual(result["values"]["sdr_max"], 0.8)
+        self.assertEqual(result["values"]["threshold_flow_accumulation"], 1000.0)
+
+    def test_boolean_strings_are_coerced(self):
+        plans = self._plans("carbon")
+        for raw, expected in [("true", True), ("False", False), (True, True),
+                              ("yes", True), ("0", False)]:
+            with self.subTest(raw=raw):
+                result = datastack.to_parameter_values(
+                    {"do_valuation": raw}, plans, self.tmp)
+                self.assertEqual(result["values"]["do_valuation"], expected)
+
+    def test_nonsense_values_are_reported_not_applied(self):
+        plans = self._plans("carbon")
+        result = datastack.to_parameter_values(
+            {"do_valuation": "banana", "discount_rate": "not-a-number"},
+            plans, self.tmp)
+        self.assertEqual(result["values"], {})
+        self.assertEqual(len(result["problems"]), 2)
+
+    def test_enum_matches_case_insensitively(self):
+        plans = self._plans("sdr")
+        result = datastack.to_parameter_values(
+            {"flow_dir_algorithm": "mfd"}, plans, self.tmp)
+        self.assertEqual(result["values"]["flow_dir_algorithm"], "MFD")
+
+        bad = datastack.to_parameter_values(
+            {"flow_dir_algorithm": "D9"}, plans, self.tmp)
+        self.assertNotIn("flow_dir_algorithm", bad["values"])
+        self.assertTrue(bad["problems"])
+
+    def test_workspace_is_never_restored_from_a_datastack(self):
+        """A datastack records the workspace it was authored with, which would
+        point at another machine or clobber a previous run's results."""
+        result = datastack.to_parameter_values(
+            {"workspace_dir": "/somewhere/else", "sdr_max": "0.8"},
+            self._plans("sdr"), self.tmp)
+        self.assertNotIn("workspace_dir", result["values"])
+        self.assertEqual(result["skipped"], ["workspace_dir"])
+        # ...and it is not misreported as an argument the model lacks.
+        self.assertNotIn("workspace_dir", result["unknown"])
+
+    def test_blank_unknown_and_ignored_keys_are_classified(self):
+        result = datastack.to_parameter_values(
+            {"drainage_path": "", "not_a_real_arg": "x", "n_workers": 4,
+             "sdr_max": "0.8"},
+            self._plans("sdr"), self.tmp)
+        self.assertEqual(result["empty"], ["drainage_path"])
+        self.assertEqual(result["unknown"], ["not_a_real_arg"])
+        # n_workers is managed by the plugin and must never be loaded.
+        self.assertNotIn("n_workers", result["values"])
+        self.assertIn("sdr_max", result["values"])
+
+    # -- against the real sample datastacks ---------------------------------
+
+    @unittest.skipUnless(os.path.isdir(SAMPLE_DATA), "InVEST sample data absent")
+    def test_real_sdr_datastack_maps_completely(self):
+        path = os.path.join(self.SAMPLE_DATA, "SDR", "sdr_gura.invs.json")
+        result = datastack.load_for_plans(path, self._plans("sdr"))
+        self.assertEqual(result["unknown"], [])
+        self.assertEqual(result["problems"], [])
+        self.assertEqual(result["empty"], ["drainage_path"])
+        self.assertTrue(os.path.isabs(result["values"]["dem_path"]))
+        self.assertTrue(os.path.exists(result["values"]["dem_path"]))
+        self.assertIsInstance(result["values"]["sdr_max"], float)
+
+    @unittest.skipUnless(os.path.isdir(SAMPLE_DATA), "InVEST sample data absent")
+    def test_renamed_legacy_args_are_reported_not_silently_dropped(self):
+        """The 3.7-era Carbon datastack uses lulc_cur_path etc., which today's
+        spec calls lulc_bas_path. The user must be told."""
+        path = os.path.join(self.SAMPLE_DATA, "Carbon", "carbon_willamette.invs.json")
+        result = datastack.load_for_plans(path, self._plans("carbon"))
+        self.assertIn("lulc_cur_path", result["unknown"])
+        self.assertIn("carbon_pools_path", result["values"])
 
 
 class TestErrorHandling(unittest.TestCase):

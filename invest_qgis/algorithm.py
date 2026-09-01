@@ -111,6 +111,24 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
     def flags(self):
         return super().flags() | Qgis.ProcessingAlgorithmFlag.CanCancel
 
+    def parameter_plans(self):
+        """Expose the parameter plans so the dialog can map datastack values."""
+        return self._plans
+
+    def createCustomParametersWidget(self, parent=None):
+        """Return a dialog with a "Load Parameters" button.
+
+        Imported lazily and defensively: this is GUI-only code, and returning
+        None simply makes Processing fall back to its standard dialog, which
+        is the right outcome under qgis_process or if the import fails.
+        """
+        try:
+            from .gui import InvestAlgorithmDialog
+
+            return InvestAlgorithmDialog(self, parent)
+        except Exception:  # noqa: BLE001 - never block the standard dialog
+            return None
+
     # -- definition ---------------------------------------------------------
 
     def initAlgorithm(self, configuration=None):

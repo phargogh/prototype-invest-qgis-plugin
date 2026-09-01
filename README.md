@@ -54,6 +54,25 @@ Models are grouped in the toolbox under *InVEST* (Freshwater, Marine and
 Coastal, Terrestrial, Urban, Support Tools). Pick a model, fill in the
 parameters, and choose a workspace folder for the results.
 
+### Loading parameters from a datastack
+
+Rather than filling in a dozen paths by hand, press **Load Parameters…** at the
+bottom of any InVEST algorithm dialog and pick an InVEST datastack
+(`.invest.json`, or the older `.invs.json`). The inputs are populated in place,
+so you can review and adjust them before running.
+
+Datastacks in the wild are messy, and the loader handles that rather than
+failing: relative paths are resolved against the datastack file, quoted numbers
+(`"0.8"`) are converted, `"true"`/`"false"` become real booleans, and dropdown
+values are matched case-insensitively.
+
+Anything that does not carry over is reported instead of being silently
+dropped — which matters, because InVEST renames arguments between releases. The
+Carbon datastack in the 3.13 sample data is from InVEST 3.7 and still says
+`lulc_cur_path` where the current model says `lulc_bas_path`; loading it fills
+in what it can and tells you the rest. The full breakdown goes to the *InVEST*
+tab of the Log Messages panel.
+
 When the run finishes, top-level spatial outputs are added to the map in a
 layer-tree group named after the model. The advanced parameter **Also load
 intermediate outputs onto the map** additionally loads the contents of the
@@ -105,6 +124,10 @@ directory entries; 3.20 gives each an explicit path) into one internal shape.
   own process group so that pressing Cancel terminates it and any helper
   processes it started, rather than orphaning a model that keeps writing to the
   workspace.
+
+The workspace folder is deliberately left out of loaded datastacks even when
+one names it, so a saved parameter set cannot quietly overwrite a previous run's
+results — pick the workspace yourself.
 
 ## Tests
 
