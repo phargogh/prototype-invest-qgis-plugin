@@ -15,8 +15,9 @@ from qgis.core import (
 )
 
 from . import outputs as outputs_module
-from . import paramspec, parameters, settings
+from . import paramspec, parameters, server, settings
 from .locator import InvestNotFound, find_binary, quick_version
+from .paramspec import format_validation_warnings
 from .runner import InvestRunner
 
 USERGUIDE_BASE = (
@@ -176,6 +177,61 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(error)) from error
         return InvestRunner(binary_path, quick_version(binary_path))
 
+    def invest_args(self, parameters_, context, feedback=None, workspace=None):
+        """Return the InVEST ``args`` dict for the given parameter values.
+
+        ``workspace`` pins an already-resolved workspace path; leaving it None
+        resolves the parameter normally, which is what validation wants.
+        """
+        return parameters.build_args(
+            self, self._plans, parameters_, context, feedback,
+            workspace=workspace)
+
+    def validate_args(self, args, wait=False):
+        """Return InVEST's warnings for ``args`` as ``(keys, message)`` pairs.
+
+        Returns ``None`` when validation could not be run, which is different
+        from an empty list meaning "no problems found".
+        """
+        try:
+            binary_path = find_binary(settings.app_path())
+        except InvestNotFound:
+            return None
+
+        invest = server.get(binary_path)
+        if not wait and not invest.is_ready():
+            # Never block the GUI thread waiting for the server to warm up.
+            return None
+        try:
+            return invest.validate(self._spec["model_id"], args)
+        except server.ServerError:
+            return None
+
+    def checkParameterValues(self, parameters_, context):
+        """Run InVEST's own validation before the model starts.
+
+        This is what surfaces InVEST's conditional requirements -- rules the
+        Processing dialog cannot express -- as errors on the Run button rather
+        than as a failure a minute into the run.  It is skipped silently if the
+        validation server is not warm yet, because blocking the GUI would be a
+        worse trade than not validating.
+        """
+        ok, message = super().checkParameterValues(parameters_, context)
+        if not ok:
+            return ok, message
+        if not settings.validate_before_run():
+            return True, ""
+
+        try:
+            args = self.invest_args(parameters_, context)
+        except Exception:  # noqa: BLE001 - resolving inputs may fail here
+            return True, ""
+
+        warnings = self.validate_args(args)
+        if not warnings:
+            return True, ""
+        return False, format_validation_warnings(warnings, self._plans)
+
     def processAlgorithm(self, parameters_, context, feedback):
         runner = self._runner()
 
@@ -185,12 +241,7 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException("A workspace folder is required.")
         os.makedirs(workspace, exist_ok=True)
 
-        args = parameters.build_args(
-            self, self._plans, parameters_, context, feedback,
-            workspace=workspace)
-
-        if settings.validate_before_run():
-            self._validate(runner, args, workspace, feedback)
+        args = self.invest_args(parameters_, context, feedback, workspace)
 
         if feedback.isCanceled():
             return {}
@@ -199,20 +250,6 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
 
         return self._collect_results(parameters_, context, feedback,
                                      workspace, args)
-
-    def _validate(self, runner, args, workspace, feedback):
-        feedback.pushInfo("Validating inputs with InVEST…")
-        warnings = runner.validate(self._spec["model_id"], args, workspace)
-        if warnings is None:
-            feedback.pushWarning(
-                "Could not run InVEST validation; continuing anyway.")
-            return
-        if warnings:
-            for keys, message in warnings:
-                feedback.reportError(f"{', '.join(keys)}: {message}")
-            raise QgsProcessingException(
-                "InVEST validation failed. See the errors above.")
-        feedback.pushInfo("Inputs validated.")
 
     def _collect_results(self, parameters_, context, feedback, workspace, args):
         include_intermediate = self.parameterAsBoolean(

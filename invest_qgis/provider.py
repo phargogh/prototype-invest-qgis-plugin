@@ -10,7 +10,7 @@ from qgis.core import (
     QgsTask,
 )
 
-from . import harvest, normalize, settings, speccache
+from . import harvest, normalize, server, settings, speccache
 from .algorithm import InvestAlgorithm
 from .locator import InvestNotFound, find_binary, quick_version
 
@@ -113,6 +113,9 @@ class InvestProvider(QgsProcessingProvider):
         return True
 
     def unload(self):
+        # Leaving the InVEST server running would outlive the plugin.
+        server.shutdown()
+
         from processing.core.ProcessingConfig import ProcessingConfig
 
         for key in (settings.APP_PATH, settings.VALIDATE_BEFORE_RUN,

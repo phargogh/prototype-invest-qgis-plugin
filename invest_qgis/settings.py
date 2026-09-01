@@ -7,8 +7,8 @@ from qgis.core import QgsApplication
 #: Path to the InVEST Workbench application the user installed.
 APP_PATH = "INVEST_APP_PATH"
 
-#: Run `invest validate` before executing.  Off by default because it costs a
-#: full frozen-binary startup (about a minute) on top of the run itself.
+#: Check inputs with InVEST's own validation before running.  Answered by a
+#: warm InVEST server in milliseconds, so this is on by default.
 VALIDATE_BEFORE_RUN = "INVEST_VALIDATE_BEFORE_RUN"
 
 #: Also load outputs from the model's intermediate directory.
@@ -33,7 +33,9 @@ def app_path():
 
 
 def validate_before_run():
-    return bool(_config().getSetting(VALIDATE_BEFORE_RUN))
+    value = _config().getSetting(VALIDATE_BEFORE_RUN)
+    # An unregistered setting reads back as None; default to validating.
+    return True if value is None else bool(value)
 
 
 def load_intermediate_default():
@@ -50,8 +52,8 @@ def register(provider_name):
         "", valuetype=Setting.FOLDER))
     ProcessingConfig.addSetting(Setting(
         provider_name, VALIDATE_BEFORE_RUN,
-        "Validate inputs before running (slower: adds about a minute)",
-        False))
+        "Check inputs with InVEST before running",
+        True))
     ProcessingConfig.addSetting(Setting(
         provider_name, LOAD_INTERMEDIATE_DEFAULT,
         "Load intermediate outputs onto the map by default",

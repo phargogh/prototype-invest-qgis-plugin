@@ -26,7 +26,6 @@ _POLL_INTERVAL = 0.2
 #: Grace period between asking the InVEST process tree to stop and killing it.
 _TERMINATE_GRACE = 5
 
-VALIDATE_TIMEOUT = 600
 _IS_WINDOWS = sys.platform == "win32"
 
 
@@ -224,31 +223,3 @@ class InvestRunner:
                 "InVEST reported an error during execution. See the log above.")
 
         return datastack_path
-
-    def validate(self, model_id, args, workspace):
-        """Return InVEST's validation warnings as ``(keys, message)`` tuples.
-
-        Returns an empty list when the arguments validate, and ``None`` when
-        validation could not be run at all.
-        """
-        datastack_path = write_datastack(
-            workspace, model_id, self.invest_version, args)
-        try:
-            completed = subprocess.run(
-                [self.binary_path, "validate", "--json", datastack_path],
-                capture_output=True, text=True, timeout=VALIDATE_TIMEOUT,
-                stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
-            return None
-
-        # The frozen binary prints library warnings before the JSON payload.
-        for line in reversed(completed.stdout.splitlines()):
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                payload = json.loads(line)
-            except ValueError:
-                continue
-            return payload.get("validation_results", [])
-        return None

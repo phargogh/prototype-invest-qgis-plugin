@@ -43,8 +43,8 @@ after upgrading InVEST.
 
 Two other settings are available:
 
-- **Validate inputs before running** (default off) runs InVEST's own validator
-  before the model. It catches problems early but adds roughly a minute.
+- **Check inputs with InVEST before running** (default on) validates parameters
+  with InVEST itself before the model starts. See below.
 - **Load intermediate outputs onto the map by default** sets the initial state
   of the per-run checkbox described below.
 
@@ -114,8 +114,8 @@ directory entries; 3.20 gives each an explicit path) into one internal shape.
 - **Conditional inputs.** InVEST expresses some requirements as an expression
   over other inputs (`lulc_alt_path` is required only if `calc_sequestration`
   is checked). The Processing dialog cannot evaluate those, so such inputs are
-  optional widgets labelled with their condition, and InVEST enforces the real
-  rule when the model runs.
+  optional widgets labelled with their condition, and the rule is enforced by
+  InVEST's validator before the run starts.
 - **Vector inputs** are passed through
   `parameterAsCompatibleSourceLayerPathAndLayerName`, so memory layers, a
   "Selected features only" choice, and provider subset filters are all honoured
@@ -129,6 +129,27 @@ directory entries; 3.20 gives each an explicit path) into one internal shape.
   own process group so that pressing Cancel terminates it and any helper
   processes it started, rather than orphaning a model that keeps writing to the
   workspace.
+
+### Validation
+
+Inputs are checked by InVEST's own validator, so the dialog enforces exactly
+what the model enforces. Press **Validate** at any time, and validation also
+runs automatically when you press Run — an invalid run is blocked with the
+problems listed against the input labels you see in the form, rather than
+failing a minute into execution.
+
+This is what makes InVEST's *conditional* requirements usable. The Processing
+dialog cannot express a rule like "Alternate LULC is required only when
+Calculate sequestration is ticked", so those inputs are optional widgets;
+validation is what actually enforces them.
+
+Validation is served by a background InVEST process that starts when you open
+an InVEST dialog. It takes about a minute to come up, after which each check
+takes a few milliseconds. Until it is ready, pressing Run will not block or
+stall — validation is simply skipped for that run, since freezing QGIS would be
+a worse trade. Pressing **Validate** before it is warm starts it in the
+background and reports when finished. The process is shut down when the plugin
+is unloaded.
 
 The workspace folder is deliberately left out of loaded datastacks even when
 one names it, so a saved parameter set cannot quietly overwrite a previous run's
@@ -159,3 +180,10 @@ and 3.20.0.
   time from another input, so it is presented as a free-text field.
 - The InVEST 3.20 Carbon spec does not declare its HTML report, so that file is
   written to the workspace but not listed as a formal output.
+- Validation needs the InVEST server to be warm. For roughly the first minute
+  of a session, pressing Run skips validation rather than stalling QGIS, so an
+  invalid run can still start during that window and fail the way it would
+  have before. Pressing **Validate** waits for the server instead of skipping.
+- Validation is not live: inputs are checked when you press Validate or Run,
+  not as you type. InVEST's `args_enabled` endpoint would allow greying out
+  inputs that do not currently apply, which is not wired up.

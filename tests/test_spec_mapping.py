@@ -17,6 +17,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from invest_qgis import datastack, normalize, outputs, paramspec  # noqa: E402
+from invest_qgis import server  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VERSIONS = ["3.16.2", "3.20.0"]
@@ -390,6 +391,72 @@ class TestDatastack(unittest.TestCase):
         result = datastack.load_for_plans(path, self._plans("carbon"))
         self.assertIn("lulc_cur_path", result["unknown"])
         self.assertIn("carbon_pools_path", result["values"])
+
+
+class TestValidationMessages(unittest.TestCase):
+    """Validation warnings must name inputs the way the dialog labels them."""
+
+    def _plans(self, model_id):
+        return paramspec.plan_model(
+            normalize.normalise(load_specs("3.20.0")[model_id])["inputs"])
+
+    def test_keys_are_translated_to_dialog_labels(self):
+        plans = self._plans("carbon")
+        text = paramspec.format_validation_warnings(
+            [[["lulc_bas_path"], "File not found"]], plans)
+        self.assertIn("Baseline LULC", text)
+        self.assertIn("File not found", text)
+        # The raw argument id is not what the user sees in the form.
+        self.assertNotIn("lulc_bas_path", text)
+
+    def test_conditional_annotation_is_stripped_from_labels(self):
+        """'Alternate LULC (required if: calc_sequestration)' is a useful form
+        label but noise inside an error message."""
+        plans = self._plans("carbon")
+        label = paramspec.label_for(plans, "lulc_alt_path")
+        self.assertNotIn("required if", label)
+        self.assertTrue(label)
+
+    def test_multiple_keys_are_all_named(self):
+        plans = self._plans("carbon")
+        text = paramspec.format_validation_warnings(
+            [[["carbon_pools_path", "workspace_dir"], "Input is required"]], plans)
+        self.assertIn("Carbon pools", text)
+        self.assertIn("Workspace", text)
+
+    def test_unknown_key_falls_back_to_the_raw_id(self):
+        self.assertEqual(paramspec.label_for([], "mystery_arg"), "mystery_arg")
+
+    def test_malformed_warning_entries_do_not_crash(self):
+        text = paramspec.format_validation_warnings(
+            ["just a string"], self._plans("carbon"))
+        self.assertIn("just a string", text)
+
+
+class TestServerClient(unittest.TestCase):
+    """Behaviour of the warm-server client that does not need InVEST."""
+
+    def test_reports_not_ready_before_starting(self):
+        invest = server.InvestServer("/nonexistent/invest")
+        self.assertFalse(invest.is_alive())
+        self.assertFalse(invest.is_ready())
+
+    def test_failure_to_launch_raises_with_a_reason(self):
+        invest = server.InvestServer("/nonexistent/invest")
+        with self.assertRaises(server.ServerError):
+            invest.ensure_running(timeout=5)
+        self.assertTrue(invest.last_error)
+
+    def test_stop_is_safe_when_never_started(self):
+        server.InvestServer("/nonexistent/invest").stop()
+
+    def test_shared_instance_is_reused_and_swapped_by_path(self):
+        first = server.get("/path/one/invest")
+        self.assertIs(server.get("/path/one/invest"), first)
+        second = server.get("/path/two/invest")
+        self.assertIsNot(second, first)
+        self.assertEqual(second.binary_path, "/path/two/invest")
+        server.shutdown()
 
 
 class TestErrorHandling(unittest.TestCase):

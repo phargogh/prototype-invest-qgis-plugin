@@ -197,3 +197,35 @@ def plan_model(inputs):
         if plan is not None:
             plans.append(plan)
     return plans
+
+
+def label_for(plans, key):
+    """Return the dialog label for an InVEST argument key.
+
+    Validation messages name raw argument ids; the user is looking at
+    descriptions, so translate before showing them.
+    """
+    for plan in plans:
+        if plan["name"] == key:
+            # Strip the conditional annotation, which is noise in an error.
+            return plan["description"].split(" (required if:")[0]
+    return key
+
+
+def format_validation_warnings(warnings, plans):
+    """Render InVEST validation warnings as readable text.
+
+    Args:
+        warnings: ``[[keys], message]`` pairs as returned by InVEST.
+        plans: parameter plans, used to name inputs the way the dialog does.
+    """
+    lines = []
+    for entry in warnings:
+        try:
+            keys, message = entry
+        except (TypeError, ValueError):
+            lines.append(str(entry))
+            continue
+        labels = ", ".join(label_for(plans, key) for key in keys)
+        lines.append(f"\u2022 {labels}: {message}")
+    return "InVEST found problems with these inputs:\n\n" + "\n".join(lines)
