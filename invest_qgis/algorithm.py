@@ -168,7 +168,8 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
         os.makedirs(workspace, exist_ok=True)
 
         args = parameters.build_args(
-            self, self._plans, parameters_, context, feedback)
+            self, self._plans, parameters_, context, feedback,
+            workspace=workspace)
 
         if settings.validate_before_run():
             self._validate(runner, args, workspace, feedback)
@@ -229,7 +230,47 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
                 f"Adding {loaded} output layer(s) to the map in group "
                 f"'{self._spec['model_title']}'.")
         else:
-            feedback.pushWarning(
-                "No spatial outputs were found to add to the map. Check the "
-                "workspace folder.")
+            self._report_nothing_found(feedback, workspace, suffix,
+                                       include_intermediate)
         return results
+
+    def _report_nothing_found(self, feedback, workspace, suffix,
+                              include_intermediate):
+        """Explain why no layers were added, rather than just saying none were.
+
+        The usual causes are a results suffix that does not match the files on
+        disk, or a model whose only spatial results live in the intermediate
+        directory.
+        """
+        feedback.pushWarning(
+            f"No spatial outputs were added to the map from {workspace}")
+        try:
+            present = sorted(os.listdir(workspace))
+        except OSError as error:
+            feedback.pushWarning(f"The workspace could not be read: {error}")
+            return
+
+        if not present:
+            feedback.pushWarning(
+                "The workspace is empty, so the model does not appear to have "
+                "written anything.")
+            return
+
+        feedback.pushWarning("The workspace contains: " + ", ".join(present[:25]))
+        expected = [outputs_module.resolve_path(workspace, record["path"], suffix)
+                    for record in self._spec["outputs"]
+                    if include_intermediate or not record["is_intermediate"]]
+        missing = [path for path in expected if not os.path.exists(path)][:5]
+        if missing:
+            feedback.pushWarning(
+                "Expected, but not found: "
+                + ", ".join(os.path.basename(path) for path in missing))
+        if suffix:
+            feedback.pushWarning(
+                f"Note that the results suffix {suffix!r} is part of the "
+                f"expected filenames.")
+        if not include_intermediate:
+            feedback.pushWarning(
+                "If this model writes its results to the intermediate "
+                "directory, enable 'Also load intermediate outputs onto the "
+                "map' in the advanced parameters.")

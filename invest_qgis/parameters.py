@@ -210,14 +210,23 @@ def read_value(algorithm, plan, parameters, context, feedback):
     return algorithm.parameterAsString(parameters, name, context)
 
 
-def build_args(algorithm, plans, parameters, context, feedback):
+def build_args(algorithm, plans, parameters, context, feedback, workspace=None):
     """Return the complete InVEST ``args`` dict for a run.
 
     Every key the model declares is included, because InVEST's validation
     reports a missing key differently from an empty one.
+
+    ``workspace`` must be the already-resolved workspace path.  Re-resolving it
+    here would be wrong: for a destination parameter left as "temporary",
+    every call to ``parameterAsString`` mints a *new* temporary directory, so
+    the datastack would name a different folder from the one the model is
+    told to write into.
     """
     args = {}
     for plan in plans:
+        if workspace is not None and plan["kind"] == "folder_destination":
+            args[plan["name"]] = workspace
+            continue
         args[plan["name"]] = read_value(
             algorithm, plan, parameters, context, feedback)
     # Always run synchronously: spawning taskgraph worker processes from a
