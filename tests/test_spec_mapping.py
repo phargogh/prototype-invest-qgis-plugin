@@ -684,6 +684,77 @@ class TestHarvestProgress(unittest.TestCase):
         self.assertIn("sdr (2/2)", messages)
 
 
+class TestEnumKeyTranslation(unittest.TestCase):
+    """Dropdowns show a label but InVEST expects a key.
+
+    A QgsProcessingParameterEnum with usesStaticStrings stores the option
+    strings themselves, so the label has to be translated back before the
+    value reaches InVEST. Sending the label instead leaves conditional inputs
+    greyed out and puts an invalid option string into the model run.
+    """
+
+    def _plan(self, model_id, name):
+        spec = normalize.normalise(load_specs("3.20.0")[model_id])
+        return {p["name"]: p for p in paramspec.plan_model(spec["inputs"])}[name]
+
+    def test_label_translates_to_the_invest_key(self):
+        plan = self._plan("urban_nature_access", "search_radius_mode")
+        self.assertEqual(
+            paramspec.enum_key_for_value(plan, "Uniform radius"),
+            "uniform radius")
+
+    def test_a_key_passes_through_unchanged(self):
+        """Values typed in the modeler or given to qgis_process are keys."""
+        plan = self._plan("urban_nature_access", "search_radius_mode")
+        self.assertEqual(
+            paramspec.enum_key_for_value(plan, "uniform radius"),
+            "uniform radius")
+
+    def test_translation_round_trips(self):
+        plan = self._plan("coastal_vulnerability", "geomorphology_fill_value")
+        for key in plan["option_keys"]:
+            label = paramspec.enum_value_for_key(plan, key)
+            self.assertEqual(paramspec.enum_key_for_value(plan, label), key)
+
+    def test_default_is_a_real_option_not_a_key(self):
+        """A default that is not one of the option strings matches nothing."""
+        for model_id, name in [("urban_nature_access", "search_radius_mode"),
+                               ("habitat_risk_assessment", "risk_eq"),
+                               ("sdr", "flow_dir_algorithm")]:
+            with self.subTest(model=model_id):
+                plan = self._plan(model_id, name)
+                self.assertIn(plan["default"], plan["options"])
+
+    def test_every_enum_in_every_model_round_trips(self):
+        for version, model_id, raw in iter_models():
+            spec = normalize.normalise(raw)
+            for plan in paramspec.plan_model(spec["inputs"]):
+                if plan["kind"] != "enum":
+                    continue
+                with self.subTest(version=version, model=model_id,
+                                  param=plan["name"]):
+                    self.assertEqual(len(plan["options"]),
+                                     len(plan["option_keys"]))
+                    for key in plan["option_keys"]:
+                        label = paramspec.enum_value_for_key(plan, key)
+                        self.assertEqual(
+                            paramspec.enum_key_for_value(plan, label), key)
+
+    def test_datastack_gives_the_widget_a_label(self):
+        """to_parameter_values feeds widgets, so an enum must arrive as the
+        label the dropdown actually contains."""
+        plans = paramspec.plan_model(
+            normalize.normalise(load_specs("3.20.0")["urban_nature_access"])["inputs"])
+        result = datastack.to_parameter_values(
+            {"search_radius_mode": "uniform radius"}, plans, "/tmp")
+        self.assertEqual(result["values"]["search_radius_mode"], "Uniform radius")
+
+    def test_unknown_value_is_left_alone(self):
+        plan = self._plan("sdr", "flow_dir_algorithm")
+        self.assertEqual(paramspec.enum_key_for_value(plan, "nonsense"),
+                         "nonsense")
+
+
 class TestErrorHandling(unittest.TestCase):
 
     def test_unsupported_spec_raises(self):

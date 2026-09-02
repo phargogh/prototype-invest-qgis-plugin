@@ -223,7 +223,8 @@ def read_value(algorithm, plan, parameters, context, feedback, materialise=True)
     if kind in ("file", "folder"):
         return algorithm.parameterAsFile(parameters, name, context)
     if kind == "enum":
-        return algorithm.parameterAsEnumString(parameters, name, context)
+        return paramspec.enum_key_for_value(
+            plan, algorithm.parameterAsEnumString(parameters, name, context))
     if kind == "integer":
         return algorithm.parameterAsInt(parameters, name, context)
     if kind == "number":

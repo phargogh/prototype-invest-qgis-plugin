@@ -167,13 +167,14 @@ def plan_parameter(record):
         options = record.get("options") or []
         if options:
             keys = [option["key"] for option in options]
+            labels = [option["display_name"] for option in options]
             plan.update(
                 kind="enum",
-                options=[option["display_name"] for option in options],
+                options=labels,
                 option_keys=keys,
-                # A required dropdown should resolve to a real value even if
-                # the user never touches it.
-                default=None if optional else keys[0])
+                # The default has to be one of the option strings, which are
+                # the labels; a key would match nothing when they differ.
+                default=None if optional else labels[0])
         else:
             # A runtime-computed dropdown; fall back to free text.
             plan["kind"] = "string"
@@ -229,3 +230,30 @@ def format_validation_warnings(warnings, plans):
         labels = ", ".join(label_for(plans, key) for key in keys)
         lines.append(f"\u2022 {labels}: {message}")
     return "InVEST found problems with these inputs:\n\n" + "\n".join(lines)
+
+
+def enum_key_for_value(plan, value):
+    """Return the InVEST option key for a value coming out of the widget.
+
+    A QgsProcessingParameterEnum with usesStaticStrings stores the option
+    strings themselves, and those are the human-readable labels, so the label
+    has to be translated back to the key InVEST expects.  A key is accepted
+    unchanged, so a value typed in the modeler or passed to qgis_process still
+    works.
+    """
+    keys = plan.get("option_keys") or []
+    if value in keys:
+        return value
+    for label, key in zip(plan.get("options") or [], keys):
+        if label == value:
+            return key
+    return value
+
+
+def enum_value_for_key(plan, key):
+    """Return the widget value for an InVEST option key."""
+    for candidate, label in zip(plan.get("option_keys") or [],
+                                plan.get("options") or []):
+        if candidate == key:
+            return label
+    return key

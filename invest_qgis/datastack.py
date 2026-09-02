@@ -79,6 +79,15 @@ def _model_id_from_pyname(pyname):
     return pyname.rsplit(".", 1)[-1]
 
 
+def _enum_label(plan, key):
+    """Return the dropdown label for an InVEST option key."""
+    for candidate, label in zip(plan.get("option_keys") or [],
+                                plan.get("options") or []):
+        if candidate == key:
+            return label
+    return key
+
+
 def _coerce_bool(value):
     if isinstance(value, bool):
         return value
@@ -159,7 +168,8 @@ def to_parameter_values(args, plans, base_dir):
                 problems.append(
                     f"{key}: {text!r} is not one of {', '.join(keys)}")
                 continue
-            values[key] = match
+            # The widget's options are labels, so hand it the label.
+            values[key] = _enum_label(plan, match)
         elif kind in _PATH_KINDS:
             values[key] = _resolve_path(str(raw), base_dir)
         else:
