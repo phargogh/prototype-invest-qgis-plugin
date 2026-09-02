@@ -163,9 +163,11 @@ debounced by half a second, and layer inputs are read by their existing path
 rather than being exported, so typing never triggers a file conversion.
 
 Until the server is ready there is no as-you-type feedback, and pressing Run
-skips validation rather than stalling QGIS. Pressing **Validate** before it is
-warm starts it in the background and reports when finished. The process is shut
-down when the plugin is unloaded.
+skips validation rather than stalling QGIS. The dialog watches for the server
+finishing and shows the current state as soon as it can, so a form filled in
+during that first minute does not sit there looking unchecked. Pressing
+**Validate** before it is warm starts it in the background and reports when
+finished. The process is shut down when the plugin is unloaded.
 
 The workspace folder is deliberately left out of loaded datastacks even when
 one names it, so a saved parameter set cannot quietly overwrite a previous run's
@@ -202,4 +204,4 @@ and 3.20.0.
   have before. Pressing **Validate** waits for the server instead of skipping.
 - Live checking stays silent until the InVEST server is warm, so for roughly
   the first minute of a session there is no as-you-type feedback and no
-  greying out.
+  greying out. The dialog refreshes itself once the server is up.

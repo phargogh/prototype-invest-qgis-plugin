@@ -28,6 +28,9 @@ FILE_FILTER = (
 #: does not fire a request per keystroke.
 _DEBOUNCE_MS = 500
 
+#: How often to look for the InVEST server finishing its startup.
+_WARMUP_POLL_MS = 2000
+
 #: Colour for the label of an input InVEST is complaining about.  Chosen to
 #: stay legible against both the light and dark QGIS themes.
 _ERROR_COLOUR = "#c0392b"
@@ -82,6 +85,14 @@ class InvestAlgorithmDialog(AlgorithmDialog):
         self._live_timer.setInterval(_DEBOUNCE_MS)
         self._live_timer.timeout.connect(self.refresh_live_state)
 
+        # The server takes about a minute to start, and a form can easily be
+        # filled in before then.  Every check during that window is a silent
+        # no-op, so without this the first feedback would only appear when the
+        # user pressed Validate.
+        self._warmup_timer = QTimer(self)
+        self._warmup_timer.setInterval(_WARMUP_POLL_MS)
+        self._warmup_timer.timeout.connect(self._check_warmup)
+
         # Begin warming the InVEST server now, so that validation is instant by
         # the time the user has finished filling in the form.
         self._warm_server()
@@ -109,7 +120,20 @@ class InvestAlgorithmDialog(AlgorithmDialog):
             binary_path = find_binary(settings.app_path())
         except InvestNotFound:
             return
-        server.get(binary_path).start_in_background()
+        invest = server.get(binary_path)
+        invest.start_in_background()
+        if not invest.is_ready():
+            self._warmup_timer.start()
+
+    def _check_warmup(self):
+        """Show live feedback as soon as the server can answer."""
+        invest = self._invest()
+        if invest is None:
+            self._warmup_timer.stop()
+            return
+        if invest.is_ready():
+            self._warmup_timer.stop()
+            self.refresh_live_state()
 
     # -- helpers ------------------------------------------------------------
 

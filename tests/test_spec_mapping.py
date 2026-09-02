@@ -511,6 +511,36 @@ class TestLiveFeedbackLogic(unittest.TestCase):
         self.assertEqual(self._marks(None, {}), {})
 
 
+class TestServerReadinessGate(unittest.TestCase):
+    """A cold server must gate live checking without stranding the dialog.
+
+    Every live check during startup is a silent no-op, so something has to
+    notice when the server becomes usable; otherwise a form filled in during
+    that first minute stays unchecked until the user presses Validate.
+    """
+
+    class _FakeServer:
+        def __init__(self, ready_after):
+            self.calls = 0
+            self._ready_after = ready_after
+
+        def is_ready(self):
+            self.calls += 1
+            return self.calls > self._ready_after
+
+    def test_polling_stops_once_the_server_answers(self):
+        fake = self._FakeServer(ready_after=3)
+        polls = 0
+        while not fake.is_ready() and polls < 10:
+            polls += 1
+        self.assertEqual(polls, 3)
+        self.assertTrue(fake.is_ready())
+
+    def test_a_cold_server_reports_not_ready(self):
+        invest = server.InvestServer("/nonexistent/invest")
+        self.assertFalse(invest.is_ready())
+
+
 class TestErrorHandling(unittest.TestCase):
 
     def test_unsupported_spec_raises(self):
