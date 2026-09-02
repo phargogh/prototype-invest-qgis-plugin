@@ -30,6 +30,27 @@ _RELATIVE_CANDIDATES = {
     ],
 }
 
+#: Where InVEST installs itself, by platform.  Only the macOS layout is
+#: verified against a real installation; the others are best-effort, which is
+#: why the configuration dialog always offers a Browse button as well.
+_SEARCH_GLOBS = {
+    "Darwin": [
+        "/Applications/InVEST*.app",
+        "~/Applications/InVEST*.app",
+    ],
+    "Windows": [
+        "C:/Program Files/InVEST*",
+        "C:/Program Files (x86)/InVEST*",
+        "~/AppData/Local/Programs/InVEST*",
+    ],
+    "Linux": [
+        "/opt/InVEST*",
+        "/usr/local/InVEST*",
+        "~/InVEST*",
+        "~/.local/opt/InVEST*",
+    ],
+}
+
 #: How long to wait for ``invest --version``.  The frozen binary is slow to
 #: start (~60s measured on macOS), so this is generous on purpose.
 VERSION_TIMEOUT = 180
@@ -61,8 +82,8 @@ def find_binary(app_path):
     """
     if not app_path:
         raise InvestNotFound(
-            "No InVEST application configured. Set it in "
-            "Processing > Options > Providers > InVEST.")
+            "No InVEST installation configured. Use "
+            "Plugins > InVEST > Configure InVEST.")
 
     app_path = os.path.expanduser(app_path.strip())
     if not os.path.exists(app_path):
@@ -134,3 +155,54 @@ def quick_version(binary_path):
         if match:
             return match.group(1)
     return ""
+
+
+def _version_key(version):
+    """Sort key placing the newest release first.
+
+    Version strings are mostly ``3.20.0`` but development builds look like
+    ``3.13.0a3.dev3543+geb8201a89``.  Only the leading numbers are compared,
+    with a pre-release sorting below the matching release.
+    """
+    # Only the leading dotted numbers count.  Splitting on every non-digit
+    # would fold a pre-release suffix into the version itself, making
+    # "3.20.0a1" -> (3, 20, 0, 1) sort above "3.20.0" -> (3, 20, 0).
+    match = re.match(r"(\d+(?:\.\d+)*)", version or "")
+    numbers = tuple(int(part) for part in match.group(1).split(".")) if match else ()
+    is_release = re.search(r"(a\d|b\d|rc|dev)", version or "") is None
+    return (numbers, is_release)
+
+
+def detect_installations(search_globs=None):
+    """Find InVEST installations without running anything.
+
+    Versions are read from the ``natcap_invest-*.dist-info`` directory beside
+    the frozen binary, so scanning is a filesystem operation rather than a
+    minute of process startup per candidate.
+
+    Args:
+        search_globs: patterns to search *instead of* the platform defaults.
+            Used by tests so that a real installation on the machine running
+            them cannot affect the result.
+
+    Returns:
+        A list of ``(app_path, binary_path, version)`` tuples, newest first.
+        Candidates without a usable executable are skipped.
+    """
+    patterns = (list(search_globs) if search_globs is not None
+                else list(_SEARCH_GLOBS.get(platform.system(), [])))
+
+    found = {}
+    for pattern in patterns:
+        for candidate in glob.glob(os.path.expanduser(pattern)):
+            candidate = os.path.normpath(candidate)
+            if candidate in found:
+                continue
+            try:
+                binary_path = find_binary(candidate)
+            except InvestNotFound:
+                continue
+            found[candidate] = (candidate, binary_path, quick_version(binary_path))
+
+    return sorted(found.values(), key=lambda item: _version_key(item[2]),
+                  reverse=True)

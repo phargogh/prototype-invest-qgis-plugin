@@ -16,30 +16,39 @@ InVEST Workbench application that you install separately.
 
 ## Install
 
-Copy or symlink the `invest_qgis` directory into your QGIS plugin folder:
+Download or build `invest_qgis-<version>.zip`, then in QGIS choose
+*Plugins ▸ Manage and Install Plugins ▸ Install from ZIP* and select it.
+
+To build the ZIP from a checkout:
 
 ```bash
-ln -s "$PWD/invest_qgis" "$HOME/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/invest_qgis"
+./package.sh
 ```
 
-On Windows that folder is
-`%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins`, and on Linux
-`~/.local/share/QGIS/QGIS3/profiles/default/python/plugins`.
-
-Then enable **InVEST** in *Plugins ▸ Manage and Install Plugins*.
+For plugin development, symlinking the source directory into your profile's
+`python/plugins` folder instead means a Plugin Reloader click picks up edits
+without reinstalling.
 
 ## Configure
 
-Open *Processing ▸ Options ▸ Providers ▸ InVEST* and set **InVEST application**
-to the Workbench you installed, for example
-`/Applications/InVEST 3.20.0 Workbench.app`. The plugin finds the executable
-inside the bundle itself.
+The plugin runs models using a separate InVEST installation, so it needs to
+know where one is. Open *Plugins ▸ InVEST ▸ Configure InVEST…*.
 
-The first time you set this, the plugin reads the specification of every InVEST
-model in the background. This takes about a minute, after which the models
-appear in the Processing Toolbox. The result is cached, so later QGIS sessions
-start instantly. Use *Plugins ▸ InVEST ▸ Refresh InVEST models* to re-read them
-after upgrading InVEST.
+The dialog lists the InVEST installations it can find, with their versions, and
+you pick one. If yours is somewhere unusual, use **Browse…** — you can select
+either the application itself (`InVEST 3.20.0 Workbench.app` on macOS) or the
+`invest` executable inside it. The status line tells you what was found before
+you commit to it, and **Test** starts InVEST to confirm it really works.
+
+The path is stored as a Processing setting, so it can also be set directly in
+*Processing ▸ Options ▸ Providers ▸ InVEST*, or scripted for a headless
+`qgis_process` machine.
+
+Once configured, the plugin reads the specification of every InVEST model in
+the background. This takes about a minute, after which the models appear in the
+Processing Toolbox. The result is cached, so later QGIS sessions start
+instantly. Use *Plugins ▸ InVEST ▸ Refresh InVEST Models* after upgrading
+InVEST, or switch installations in the same dialog.
 
 Two other settings are available:
 
@@ -193,7 +202,8 @@ and 3.20.0.
   `normalize.py`. The tests assert that every model contributes at least one
   layer by default, which catches the more damaging direction of this mistake.
 - Only the macOS Workbench layout has been verified. The Windows and Linux
-  executable locations are best-effort guesses.
+  executable locations, and the directories scanned to detect installations,
+  are best-effort guesses; on those platforms Browse… is the reliable route.
 - `coastal_vulnerability`'s `slr_field` is a dropdown InVEST computes at run
   time from another input, so it is presented as a free-text field.
 - The InVEST 3.20 Carbon spec does not declare its HTML report, so that file is

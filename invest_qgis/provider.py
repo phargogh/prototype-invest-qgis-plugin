@@ -154,8 +154,9 @@ class InvestProvider(QgsProcessingProvider):
         if payload is None:
             if not auto_harvest:
                 self._warning = (
-                    "The InVEST model list could not be read. See the InVEST "
-                    "log messages panel for details.")
+                    "The InVEST model list has not been read yet. Use "
+                    "Plugins > InVEST > Refresh InVEST Models. If it was "
+                    "already tried, see the InVEST log messages panel.")
                 return
             if self._harvest_now(binary_path):
                 payload = speccache.load(settings.cache_dir(), binary_path)

@@ -17,7 +17,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from invest_qgis import datastack, normalize, outputs, paramspec  # noqa: E402
-from invest_qgis import server  # noqa: E402
+from invest_qgis import locator, server  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VERSIONS = ["3.16.2", "3.20.0"]
@@ -539,6 +539,79 @@ class TestServerReadinessGate(unittest.TestCase):
     def test_a_cold_server_reports_not_ready(self):
         invest = server.InvestServer("/nonexistent/invest")
         self.assertFalse(invest.is_ready())
+
+
+class TestInstallationDetection(unittest.TestCase):
+    """Finding InVEST installations without launching anything."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _make_install(self, name, version, executable=True):
+        """Build a fake macOS-style Workbench bundle."""
+        app = os.path.join(self.tmp, name)
+        internal = os.path.join(app, "Contents", "Resources", "invest")
+        os.makedirs(os.path.join(internal, "_internal",
+                                 f"natcap_invest-{version}.dist-info"))
+        binary = os.path.join(internal, "invest")
+        with open(binary, "w") as handle:
+            handle.write("#!/bin/sh\n")
+        if executable:
+            os.chmod(binary, 0o755)
+        return app
+
+    def test_finds_installs_and_reads_their_versions(self):
+        self._make_install("InVEST 3.20.0 Workbench.app", "3.20.0")
+        found = locator.detect_installations(
+            search_globs=[os.path.join(self.tmp, "InVEST*.app")])
+        self.assertEqual(len(found), 1)
+        app_path, binary_path, version = found[0]
+        self.assertEqual(version, "3.20.0")
+        self.assertTrue(os.path.exists(binary_path))
+
+    def test_newest_release_comes_first(self):
+        for name, version in [("InVEST 3.9.0 Workbench.app", "3.9.0"),
+                              ("InVEST 3.20.0 Workbench.app", "3.20.0"),
+                              ("InVEST 3.16.2 Workbench.app", "3.16.2")]:
+            self._make_install(name, version)
+        found = locator.detect_installations(
+            search_globs=[os.path.join(self.tmp, "InVEST*.app")])
+        self.assertEqual([version for _a, _b, version in found],
+                         ["3.20.0", "3.16.2", "3.9.0"])
+
+    def test_prerelease_sorts_below_the_matching_release(self):
+        self._make_install("InVEST 3.20.0 Workbench.app", "3.20.0")
+        self._make_install("InVEST dev Workbench.app", "3.20.0a1.dev3+gabc")
+        found = locator.detect_installations(
+            search_globs=[os.path.join(self.tmp, "InVEST*.app")])
+        self.assertEqual(found[0][2], "3.20.0")
+
+    def test_candidate_without_an_executable_is_skipped(self):
+        self._make_install("InVEST broken Workbench.app", "3.20.0",
+                           executable=False)
+        self.assertEqual(
+            locator.detect_installations(
+                search_globs=[os.path.join(self.tmp, "InVEST*.app")]),
+            [])
+
+    def test_no_matches_is_not_an_error(self):
+        self.assertEqual(
+            locator.detect_installations(
+                search_globs=[os.path.join(self.tmp, "nothing*")]),
+            [])
+
+    def test_duplicate_patterns_do_not_duplicate_results(self):
+        self._make_install("InVEST 3.20.0 Workbench.app", "3.20.0")
+        pattern = os.path.join(self.tmp, "InVEST*.app")
+        self.assertEqual(
+            len(locator.detect_installations(search_globs=[pattern, pattern])), 1)
+
+    def test_unconfigured_error_points_at_the_menu_action(self):
+        """The message is the only guidance a new user gets in the toolbox."""
+        with self.assertRaises(locator.InvestNotFound) as caught:
+            locator.find_binary("")
+        self.assertIn("Configure InVEST", str(caught.exception))
 
 
 class TestErrorHandling(unittest.TestCase):
