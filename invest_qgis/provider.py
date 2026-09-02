@@ -9,6 +9,7 @@ from qgis.core import (
     QgsProcessingProvider,
     QgsTask,
 )
+from qgis.PyQt.QtCore import pyqtSignal
 
 from . import harvest, normalize, server, settings, speccache
 from .algorithm import InvestAlgorithm
@@ -22,6 +23,15 @@ def _log(message, level=Qgis.MessageLevel.Info):
     QgsMessageLog.logMessage(message, LOG_GROUP, level)
 
 
+def _needs_synchronous_harvest():
+    """True where a background QgsTask would never get the chance to run.
+
+    Under ``qgis_process`` or a plain PyQGIS script there is no event loop
+    servicing the task manager, so the provider would stay empty forever.
+    """
+    return QgsApplication.platform() != "desktop"
+
+
 class _HarvestTask(QgsTask):
     """Fetches every model spec in the background.
 
@@ -29,23 +39,31 @@ class _HarvestTask(QgsTask):
     run on the GUI thread.
     """
 
+    #: Emitted with a human-readable description of the current step.
+    stepChanged = pyqtSignal(str)
+
     def __init__(self, provider, binary_path, cache_dir):
         super().__init__("Reading InVEST model specifications",
                          QgsTask.Flag.CanCancel)
         self._provider = provider
         self._binary_path = binary_path
         self._cache_dir = cache_dir
-        self._error = None
-        self._count = 0
+        #: Readable by whoever is showing progress, once the task has finished.
+        self.error_message = ""
+        self.model_count = 0
+
+    def _report(self, message, fraction=None):
+        if fraction is not None:
+            self.setProgress(fraction * 100)
+        self.stepChanged.emit(message)
 
     def run(self):
         try:
             specs = harvest.harvest_specs(
-                self._binary_path,
-                progress=lambda message: self.setDescription(message),
+                self._binary_path, progress=self._report,
                 is_canceled=self.isCanceled)
         except harvest.HarvestError as error:
-            self._error = str(error)
+            self.error_message = str(error)
             return False
 
         if self.isCanceled():
@@ -53,22 +71,27 @@ class _HarvestTask(QgsTask):
 
         speccache.save(self._cache_dir, self._binary_path,
                        quick_version(self._binary_path), specs)
-        self._count = len(specs)
+        self.model_count = len(specs)
         return True
 
     def finished(self, result):
         # Runs on the main thread, so it is safe to touch the registry here.
         if result:
-            _log(f"Loaded {self._count} InVEST models.")
+            _log(f"Loaded {self.model_count} InVEST models.")
             self._provider.reload_from_cache()
-        elif self._error:
-            _log(f"Could not read InVEST models: {self._error}",
+        elif self.error_message:
+            _log(f"Could not read InVEST models: {self.error_message}",
                  Qgis.MessageLevel.Critical)
+            self._provider.harvest_failed(self.error_message)
         self._provider.harvest_finished()
 
 
 class InvestProvider(QgsProcessingProvider):
     """Publishes one Processing algorithm per InVEST model."""
+
+    #: Emitted with the task whenever a harvest begins, including the ones
+    #: started automatically, so the plugin can show progress for those too.
+    harvest_started = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -158,7 +181,15 @@ class InvestProvider(QgsProcessingProvider):
                     "Plugins > InVEST > Refresh InVEST Models. If it was "
                     "already tried, see the InVEST log messages panel.")
                 return
-            if self._harvest_now(binary_path):
+            if _needs_synchronous_harvest():
+                # Nothing will run a background task here, so this either
+                # worked or it did not; queuing one would only strand the
+                # provider in a permanent "harvesting" state.
+                if not self._harvest_now(binary_path):
+                    self._warning = (
+                        "Could not read the InVEST models. See the InVEST "
+                        "log messages panel for details.")
+                    return
                 payload = speccache.load(settings.cache_dir(), binary_path)
             else:
                 self._warning = (
@@ -186,19 +217,14 @@ class InvestProvider(QgsProcessingProvider):
         return normalised
 
     def _harvest_now(self, binary_path):
-        """Harvest synchronously when there is no event loop to defer to.
-
-        Outside the desktop application -- under ``qgis_process`` or a plain
-        PyQGIS script -- a background QgsTask would never get the chance to
-        run, leaving the provider permanently empty.  Blocking for the one-off
-        harvest is the only way those contexts can work at all.
-        """
-        if QgsApplication.platform() == "desktop":
-            return False
-
+        """Harvest right now, returning whether it succeeded."""
         _log("Reading InVEST model specifications (this takes about a minute)…")
         try:
-            specs = harvest.harvest_specs(binary_path, progress=_log)
+            # progress is called with (message, fraction); the log takes a
+            # level as its second argument, so it cannot be passed directly.
+            specs = harvest.harvest_specs(
+                binary_path,
+                progress=lambda message, fraction=None: _log(message))
         except harvest.HarvestError as error:
             _log(f"Could not read InVEST models: {error}",
                  Qgis.MessageLevel.Critical)
@@ -209,23 +235,37 @@ class InvestProvider(QgsProcessingProvider):
         return True
 
     def start_harvest(self, binary_path=None, force=False):
-        """Kick off a background spec harvest. Returns True if one started."""
+        """Kick off a background spec harvest.
+
+        Returns:
+            The running task, so a caller with a GUI can show its progress, or
+            None if no harvest could be started.
+        """
         if self._harvesting:
-            return False
+            return None
         if binary_path is None:
             binary_path = self._binary_path()
         if binary_path is None:
-            return False
+            return None
         if force:
             speccache.clear(settings.cache_dir())
 
         self._harvesting = True
         task = _HarvestTask(self, binary_path, settings.cache_dir())
+        self.harvest_started.emit(task)
         QgsApplication.taskManager().addTask(task)
-        return True
+        return task
 
     def harvest_finished(self):
         self._harvesting = False
+
+    def harvest_failed(self, message):
+        """Leave the reason in the toolbox, not just in a transient message.
+
+        Otherwise the provider keeps advertising that the model list is being
+        read long after the attempt gave up.
+        """
+        self._warning = f"Could not read the InVEST models: {message}"
 
     def reload_from_cache(self):
         """Re-read the cache and republish the algorithms."""

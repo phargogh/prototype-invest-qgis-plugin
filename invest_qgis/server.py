@@ -96,8 +96,12 @@ class InvestServer:
 
         threading.Thread(target=warm, daemon=True, name="invest-server").start()
 
-    def ensure_running(self, timeout=START_TIMEOUT):
+    def ensure_running(self, timeout=START_TIMEOUT, on_wait=None):
         """Start the server if needed and block until it answers.
+
+        Args:
+            on_wait: optional callable receiving the seconds waited so far, so
+                a caller can show progress during the long startup.
 
         Raises:
             ServerError: if the server cannot be started.
@@ -110,7 +114,7 @@ class InvestServer:
                 self._reset()
             if self._process is None:
                 self._launch()
-            self._wait_until_ready(timeout)
+            self._wait_until_ready(timeout, on_wait)
 
     def _launch(self):
         self._port = _free_port()
@@ -135,9 +139,12 @@ class InvestServer:
             except OSError:
                 pass
 
-    def _wait_until_ready(self, timeout):
-        deadline = time.time() + timeout
+    def _wait_until_ready(self, timeout, on_wait=None):
+        started = time.time()
+        deadline = started + timeout
         while time.time() < deadline:
+            if on_wait is not None:
+                on_wait(time.time() - started)
             if self._process.poll() is not None:
                 detail = self._read_log()
                 self._reset()

@@ -13,11 +13,12 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from invest_qgis import datastack, normalize, outputs, paramspec  # noqa: E402
-from invest_qgis import locator, server  # noqa: E402
+from invest_qgis import harvest, locator, server  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VERSIONS = ["3.16.2", "3.20.0"]
@@ -612,6 +613,75 @@ class TestInstallationDetection(unittest.TestCase):
         with self.assertRaises(locator.InvestNotFound) as caught:
             locator.find_binary("")
         self.assertIn("Configure InVEST", str(caught.exception))
+
+
+class _FakeInvest:
+    """Stands in for a running InVEST server."""
+
+    def __init__(self, wait_ticks=4, models=("carbon", "sdr", "ndr")):
+        self._wait_ticks = wait_ticks
+        self._models = list(models)
+
+    def is_ready(self):
+        return False
+
+    def ensure_running(self, on_wait=None):
+        for tick in range(self._wait_ticks):
+            if on_wait is not None:
+                on_wait(tick * 25.0)
+
+    def models(self):
+        return list(self._models)
+
+    def getspec(self, model_id):
+        return {"model_id": model_id, "args": {}}
+
+
+class TestHarvestProgress(unittest.TestCase):
+    """Reading the model list takes about a minute, so it has to report
+    progress or the toolbox just sits there looking broken."""
+
+    def _harvest(self, fake):
+        seen = []
+        with unittest.mock.patch.object(harvest.server, "get", return_value=fake):
+            specs = harvest.harvest_specs(
+                "/fake/invest",
+                progress=lambda message, fraction=None: seen.append(
+                    (message, fraction)))
+        return specs, seen
+
+    def test_progress_is_reported_throughout(self):
+        specs, seen = self._harvest(_FakeInvest())
+        self.assertEqual(len(specs), 3)
+        fractions = [f for _m, f in seen if f is not None]
+        self.assertTrue(fractions, "no progress was reported")
+        self.assertAlmostEqual(fractions[-1], 1.0)
+
+    def test_progress_never_goes_backwards(self):
+        _specs, seen = self._harvest(_FakeInvest())
+        fractions = [f for _m, f in seen if f is not None]
+        for earlier, later in zip(fractions, fractions[1:]):
+            self.assertLessEqual(earlier, later)
+
+    def test_startup_cannot_appear_finished(self):
+        """The startup fraction is a time estimate, so a slow machine must not
+        show 100% while it is still waiting."""
+        fake = _FakeInvest(wait_ticks=40)   # far longer than expected
+        _specs, seen = self._harvest(fake)
+        during_startup = [f for message, f in seen
+                          if f is not None and "Starting InVEST" in message]
+        self.assertTrue(during_startup)
+        self.assertLessEqual(max(during_startup), harvest._START_SHARE)
+
+    def test_every_step_has_a_message(self):
+        _specs, seen = self._harvest(_FakeInvest())
+        self.assertTrue(all(message for message, _f in seen))
+
+    def test_each_model_is_named_as_it_is_read(self):
+        _specs, seen = self._harvest(_FakeInvest(models=("carbon", "sdr")))
+        messages = " ".join(message for message, _f in seen)
+        self.assertIn("carbon", messages)
+        self.assertIn("sdr (2/2)", messages)
 
 
 class TestErrorHandling(unittest.TestCase):

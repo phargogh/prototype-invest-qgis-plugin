@@ -45,8 +45,11 @@ The path is stored as a Processing setting, so it can also be set directly in
 `qgis_process` machine.
 
 Once configured, the plugin reads the specification of every InVEST model in
-the background. This takes about a minute, after which the models appear in the
-Processing Toolbox. The result is cached, so later QGIS sessions start
+the background. This takes about a minute, tracked by a progress bar in the
+message bar that names each step, and the models then appear in the Processing
+Toolbox. If it fails, the message bar says so and the reason InVEST gave is
+available behind *More*; the InVEST provider in the toolbox also carries the
+reason until the next attempt. The result is cached, so later QGIS sessions start
 instantly. Use *Plugins ▸ InVEST ▸ Refresh InVEST Models* after upgrading
 InVEST, or switch installations in the same dialog.
 

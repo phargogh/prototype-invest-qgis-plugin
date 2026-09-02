@@ -6,7 +6,7 @@ starts the plugin as a GUI plugin or, because ``hasProcessingProvider=yes``,
 as a Processing-only plugin.
 """
 
-from qgis.core import QgsApplication
+from qgis.core import Qgis, QgsApplication
 
 from .provider import InvestProvider
 
@@ -46,6 +46,10 @@ class InvestPlugin:
             self.iface.addPluginToMenu(MENU, action)
             self._actions.append(action)
 
+        # Harvests can also start on their own -- when the provider loads with
+        # a stale cache, for instance -- and those need the same progress
+        # reporting as the ones the user asks for.
+        self.provider.harvest_started.connect(self._show_harvest_progress)
         self._offer_setup()
 
     # -- actions ------------------------------------------------------------
@@ -61,20 +65,70 @@ class InvestPlugin:
         # Picking a different installation invalidates the cached model list;
         # reload_from_cache notices and harvests again if needed.
         self.provider.reload_from_cache()
-        self.provider.start_harvest()
-        self.iface.messageBar().pushInfo(
-            MENU, "InVEST location saved. Models will appear in the "
-                  "Processing Toolbox once the model list has been read.")
+        if not self.provider.start_harvest() and self.provider.algorithms():
+            self.iface.messageBar().pushSuccess(
+                MENU, f"Using InVEST at {dialog.selected_path()}.")
 
     def _refresh(self):
-        started = self.provider.start_harvest(force=True)
-        if started:
-            self.iface.messageBar().pushInfo(
-                MENU, "Reading InVEST models in the background…")
-        else:
+        if self.provider.start_harvest(force=True) is None:
             self.iface.messageBar().pushWarning(
-                MENU, "No InVEST installation configured. Use "
-                      "Plugins > InVEST > Configure InVEST.")
+                MENU, "Could not read the InVEST models. Check the "
+                      "installation in Plugins > InVEST > Configure InVEST.")
+
+    # -- progress reporting -------------------------------------------------
+
+    def _show_harvest_progress(self, task):
+        """Show a progress bar in the message bar while models are read.
+
+        Reading the model list takes about a minute, so without this the
+        toolbox simply stays empty with no sign that anything is happening.
+        """
+        from qgis.gui import QgsMessageBarItem
+        from qgis.PyQt.QtWidgets import QProgressBar
+
+        bar = self.iface.messageBar()
+        progress = QProgressBar()
+        progress.setRange(0, 100)
+        progress.setTextVisible(False)
+        progress.setMaximumWidth(220)
+
+        # duration 0 keeps it up until the harvest finishes.
+        item = QgsMessageBarItem(
+            MENU, "Reading the InVEST model list…", progress,
+            Qgis.MessageLevel.Info, 0, self.iface.mainWindow())
+        bar.pushItem(item)
+
+        state = {"item": item, "step": ""}
+
+        def remove():
+            if state["item"] is not None:
+                bar.popWidget(state["item"])
+                state["item"] = None
+
+        def on_progress(value):
+            progress.setValue(int(value))
+
+        def on_step(message):
+            state["step"] = message
+            item.setText(f"InVEST: {message}")
+
+        def on_done():
+            remove()
+            bar.pushSuccess(
+                MENU, f"{task.model_count} InVEST models are ready in the "
+                      f"Processing Toolbox.")
+
+        def on_failed():
+            remove()
+            detail = task.error_message or state["step"] or "No details available."
+            bar.pushMessage(
+                MENU, "Could not read the InVEST models.", detail,
+                Qgis.MessageLevel.Critical, 0)
+
+        task.progressChanged.connect(on_progress)
+        task.stepChanged.connect(on_step)
+        task.taskCompleted.connect(on_done)
+        task.taskTerminated.connect(on_failed)
 
     def _offer_setup(self):
         """Nudge the user once if the plugin has nothing to run models with."""
