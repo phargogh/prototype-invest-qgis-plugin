@@ -7,7 +7,10 @@ every other algorithm dialog in QGIS.
 
 from qgis.core import (Qgis, QgsApplication, QgsMessageLog, QgsSettings,
                        QgsTask)
+from qgis.PyQt.QtCore import QTimer
 from qgis.PyQt.QtWidgets import QDialogButtonBox, QFileDialog, QPushButton
+
+from qgis.gui import QgsProcessingParametersGenerator
 
 from processing.gui.AlgorithmDialog import AlgorithmDialog
 from processing.tools import dataobjects
@@ -20,6 +23,14 @@ _LAST_DIR_KEY = "invest_qgis/lastDatastackDir"
 
 FILE_FILTER = (
     "InVEST datastack (*.json *.invest.json *.invs.json);;All files (*)")
+
+#: Wait this long after the last edit before re-checking, so that typing a path
+#: does not fire a request per keystroke.
+_DEBOUNCE_MS = 500
+
+#: Colour for the label of an input InVEST is complaining about.  Chosen to
+#: stay legible against both the light and dark QGIS themes.
+_ERROR_COLOUR = "#c0392b"
 
 
 class _ValidateTask(QgsTask):
@@ -64,9 +75,34 @@ class InvestAlgorithmDialog(AlgorithmDialog):
         self.buttonBox().addButton(
             self._validate_button, QDialogButtonBox.ButtonRole.ActionRole)
 
+        # Remembered so decorations can be undone when a problem is fixed.
+        self._decorated = {}
+        self._live_timer = QTimer(self)
+        self._live_timer.setSingleShot(True)
+        self._live_timer.setInterval(_DEBOUNCE_MS)
+        self._live_timer.timeout.connect(self.refresh_live_state)
+
         # Begin warming the InVEST server now, so that validation is instant by
         # the time the user has finished filling in the form.
         self._warm_server()
+        self._connect_live_validation()
+
+    def _connect_live_validation(self):
+        """Re-check inputs shortly after each edit."""
+        for wrapper in self._wrappers().values():
+            signal = getattr(wrapper, "widgetValueHasChanged", None)
+            if signal is None:
+                # The deprecated WidgetWrapper class has no such signal.
+                continue
+            try:
+                signal.connect(self._schedule_live_check)
+            except (TypeError, AttributeError):
+                continue
+        # Show the initial state (e.g. which inputs start out inapplicable).
+        self._schedule_live_check()
+
+    def _schedule_live_check(self, *args):
+        self._live_timer.start()
 
     def _warm_server(self):
         try:
@@ -177,25 +213,32 @@ class InvestAlgorithmDialog(AlgorithmDialog):
 
     # -- validation ---------------------------------------------------------
 
-    def _current_args(self):
+    def _current_args(self, quiet=False):
         """Return the InVEST args for what is currently in the dialog.
 
-        Returns ``None`` and reports the reason if the inputs cannot be read.
+        Reading the panel skips Processing's own validation: a half-filled form
+        is exactly the case where InVEST's messages are most useful, so it must
+        not be rejected before InVEST ever sees it.  Layer inputs are not
+        materialised, keeping this cheap enough to run while the user types.
         """
         panel = self.mainWidget()
         if panel is None:
             return None
         try:
-            parameters = panel.createProcessingParameters()
+            parameters = panel.createProcessingParameters(
+                QgsProcessingParametersGenerator.Flag.SkipValidation)
         except Exception as error:  # noqa: BLE001 - panel raises many types
-            self._notify(self.tr("Some inputs are incomplete: {0}").format(error),
-                         Qgis.MessageLevel.Warning)
+            if not quiet:
+                self._notify(
+                    self.tr("Could not read the inputs: {0}").format(error),
+                    Qgis.MessageLevel.Warning)
             return None
         try:
             return self.algorithm().invest_args(
-                parameters, dataobjects.createContext())
+                parameters, dataobjects.createContext(), materialise=False)
         except Exception as error:  # noqa: BLE001 - layer resolution can fail
-            self._notify(str(error), Qgis.MessageLevel.Critical)
+            if not quiet:
+                self._notify(str(error), Qgis.MessageLevel.Critical)
             return None
 
     def validate_now(self):
@@ -236,6 +279,9 @@ class InvestAlgorithmDialog(AlgorithmDialog):
                 self.tr("Could not reach InVEST to validate these inputs."),
                 Qgis.MessageLevel.Warning)
             return
+        # Keep the field marks consistent with the summary just shown.
+        self.refresh_live_state()
+
         if not warnings:
             self._notify(self.tr("InVEST validated these inputs successfully."),
                          Qgis.MessageLevel.Success)
@@ -249,3 +295,97 @@ class InvestAlgorithmDialog(AlgorithmDialog):
             Qgis.MessageLevel.Warning, detail=text)
         # Also write it into the dialog's own Log tab, where there is room.
         self.setInfo(text.replace("\n", "<br>"), isWarning=True, escapeHtml=False)
+
+    # -- live feedback ------------------------------------------------------
+
+    def _invest(self):
+        """Return the shared server, or None if InVEST is not configured."""
+        try:
+            return server.get(find_binary(settings.app_path()))
+        except InvestNotFound:
+            return None
+
+    def refresh_live_state(self):
+        """Update field decorations from InVEST, if it can answer immediately.
+
+        Silent by design: this runs while the user types, so a cold server or
+        an unreadable form must produce no popups and no delay.
+        """
+        invest = self._invest()
+        if invest is None or not invest.is_ready():
+            return
+        args = self._current_args(quiet=True)
+        if args is None:
+            return
+
+        model_id = self.algorithm().name()
+        try:
+            enabled = invest.args_enabled(model_id, args)
+        except server.ServerError:
+            enabled = {}
+        try:
+            warnings = invest.validate(model_id, args)
+        except server.ServerError:
+            return
+
+        self._apply_enabled_state(enabled)
+        self._apply_validation_marks(warnings, enabled)
+
+    def _apply_enabled_state(self, enabled):
+        """Grey out inputs that do not apply given the current values.
+
+        InVEST models switch inputs on and off with expressions over other
+        arguments; this is the only way the dialog can reflect that.
+        """
+        for name, wrapper in self._wrappers().items():
+            if name not in enabled:
+                # Not an InVEST argument (e.g. the plugin's own checkbox).
+                continue
+            is_enabled = bool(enabled[name])
+            for element in (wrapper.wrappedWidget(), wrapper.wrappedLabel()):
+                if element is not None:
+                    element.setEnabled(is_enabled)
+
+    def _apply_validation_marks(self, warnings, enabled):
+        """Mark the inputs InVEST is complaining about, and unmark the rest."""
+        messages = {}
+        for entry in warnings or []:
+            try:
+                keys, message = entry
+            except (TypeError, ValueError):
+                continue
+            for key in keys:
+                # An inapplicable input is not something the user can fix.
+                if enabled.get(key, True):
+                    messages.setdefault(key, message)
+
+        for name, wrapper in self._wrappers().items():
+            if name in messages:
+                self._mark_error(name, wrapper, messages[name])
+            else:
+                self._clear_mark(name, wrapper)
+
+    def _mark_error(self, name, wrapper, message):
+        label = wrapper.wrappedLabel()
+        widget = wrapper.wrappedWidget()
+        if name not in self._decorated:
+            self._decorated[name] = (
+                label.styleSheet() if label is not None else None,
+                widget.toolTip() if widget is not None else None)
+        if label is not None:
+            label.setStyleSheet(f"color: {_ERROR_COLOUR};")
+            label.setToolTip(message)
+        if widget is not None:
+            widget.setToolTip(message)
+
+    def _clear_mark(self, name, wrapper):
+        if name not in self._decorated:
+            return
+        style, tooltip = self._decorated.pop(name)
+        label = wrapper.wrappedLabel()
+        widget = wrapper.wrappedWidget()
+        if label is not None:
+            label.setStyleSheet(style or "")
+            label.setToolTip("")
+        if widget is not None:
+            widget.setToolTip(tooltip or "")

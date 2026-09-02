@@ -133,23 +133,39 @@ directory entries; 3.20 gives each an explicit path) into one internal shape.
 ### Validation
 
 Inputs are checked by InVEST's own validator, so the dialog enforces exactly
-what the model enforces. Press **Validate** at any time, and validation also
-runs automatically when you press Run — an invalid run is blocked with the
-problems listed against the input labels you see in the form, rather than
-failing a minute into execution.
+what the model enforces.
 
-This is what makes InVEST's *conditional* requirements usable. The Processing
-dialog cannot express a rule like "Alternate LULC is required only when
-Calculate sequestration is ticked", so those inputs are optional widgets;
-validation is what actually enforces them.
+Checking happens **as you type**. Shortly after each edit the form is re-checked
+and two things update:
+
+- Inputs with a problem have their label turned red, with InVEST's message as
+  the tooltip.
+- Inputs that do not currently apply are greyed out.
+
+The greying out is InVEST's `args_enabled` rule, and it is what makes the
+model's *conditional* structure visible. Tick **Calculate sequestration** on the
+Carbon model and Alternate LULC becomes active; tick **Run valuation** and the
+price, discount rate and year fields join it. The Processing dialog has no way
+to express those dependencies itself, so without this they would all look
+equally required.
+
+An input that is greyed out is never flagged as a problem, since it is not
+something you can act on.
+
+Press **Validate** for a summary at any point, and validation runs again when
+you press Run — an invalid run is blocked with the problems listed against the
+input labels you see in the form, rather than failing a minute into execution.
 
 Validation is served by a background InVEST process that starts when you open
 an InVEST dialog. It takes about a minute to come up, after which each check
-takes a few milliseconds. Until it is ready, pressing Run will not block or
-stall — validation is simply skipped for that run, since freezing QGIS would be
-a worse trade. Pressing **Validate** before it is warm starts it in the
-background and reports when finished. The process is shut down when the plugin
-is unloaded.
+takes a few milliseconds — cheap enough to run on every edit. Checks are
+debounced by half a second, and layer inputs are read by their existing path
+rather than being exported, so typing never triggers a file conversion.
+
+Until the server is ready there is no as-you-type feedback, and pressing Run
+skips validation rather than stalling QGIS. Pressing **Validate** before it is
+warm starts it in the background and reports when finished. The process is shut
+down when the plugin is unloaded.
 
 The workspace folder is deliberately left out of loaded datastacks even when
 one names it, so a saved parameter set cannot quietly overwrite a previous run's
@@ -184,6 +200,6 @@ and 3.20.0.
   of a session, pressing Run skips validation rather than stalling QGIS, so an
   invalid run can still start during that window and fail the way it would
   have before. Pressing **Validate** waits for the server instead of skipping.
-- Validation is not live: inputs are checked when you press Validate or Run,
-  not as you type. InVEST's `args_enabled` endpoint would allow greying out
-  inputs that do not currently apply, which is not wired up.
+- Live checking stays silent until the InVEST server is warm, so for roughly
+  the first minute of a session there is no as-you-type feedback and no
+  greying out.

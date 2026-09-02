@@ -1,6 +1,7 @@
 """A single Processing algorithm class that adapts to any InVEST model spec."""
 
 import os
+import traceback
 
 from qgis.core import (
     Qgis,
@@ -128,6 +129,14 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
 
             return InvestAlgorithmDialog(self, parent)
         except Exception:  # noqa: BLE001 - never block the standard dialog
+            # Falling back silently would make the InVEST buttons and live
+            # validation vanish with no explanation, so say why in the log.
+            from qgis.core import Qgis, QgsMessageLog
+
+            QgsMessageLog.logMessage(
+                "Falling back to the standard dialog; the InVEST dialog could "
+                "not be created:\n" + traceback.format_exc(),
+                "InVEST", Qgis.MessageLevel.Warning)
             return None
 
     # -- definition ---------------------------------------------------------
@@ -177,7 +186,8 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(error)) from error
         return InvestRunner(binary_path, quick_version(binary_path))
 
-    def invest_args(self, parameters_, context, feedback=None, workspace=None):
+    def invest_args(self, parameters_, context, feedback=None, workspace=None,
+                    materialise=True):
         """Return the InVEST ``args`` dict for the given parameter values.
 
         ``workspace`` pins an already-resolved workspace path; leaving it None
@@ -185,7 +195,7 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
         """
         return parameters.build_args(
             self, self._plans, parameters_, context, feedback,
-            workspace=workspace)
+            workspace=workspace, materialise=materialise)
 
     def validate_args(self, args, wait=False):
         """Return InVEST's warnings for ``args`` as ``(keys, message)`` pairs.
@@ -223,8 +233,15 @@ class InvestAlgorithm(QgsProcessingAlgorithm):
             return True, ""
 
         try:
-            args = self.invest_args(parameters_, context)
+            args = self.invest_args(parameters_, context, materialise=False)
         except Exception:  # noqa: BLE001 - resolving inputs may fail here
+            # Let the run proceed rather than blocking it on a plugin problem,
+            # but do not lose validation without saying so.
+            from qgis.core import Qgis, QgsMessageLog
+
+            QgsMessageLog.logMessage(
+                "Skipping InVEST validation; the inputs could not be read:\n"
+                + traceback.format_exc(), "InVEST", Qgis.MessageLevel.Warning)
             return True, ""
 
         warnings = self.validate_args(args)

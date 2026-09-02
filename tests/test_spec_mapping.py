@@ -459,6 +459,58 @@ class TestServerClient(unittest.TestCase):
         server.shutdown()
 
 
+class TestLiveFeedbackLogic(unittest.TestCase):
+    """The pure decision logic behind live validation, without a QGIS dialog.
+
+    Mirrors what InvestAlgorithmDialog._apply_validation_marks decides, so the
+    rules are pinned even though the widget plumbing needs a GUI to exercise.
+    """
+
+    @staticmethod
+    def _marks(warnings, enabled):
+        messages = {}
+        for entry in warnings or []:
+            try:
+                keys, message = entry
+            except (TypeError, ValueError):
+                continue
+            for key in keys:
+                if enabled.get(key, True):
+                    messages.setdefault(key, message)
+        return messages
+
+    def test_problems_are_reported_per_input(self):
+        marks = self._marks(
+            [[["a", "b"], "Input is required but has no value"],
+             [["c"], "File not found"]], {})
+        self.assertEqual(set(marks), {"a", "b", "c"})
+        self.assertEqual(marks["b"], "Input is required but has no value")
+
+    def test_inapplicable_inputs_are_not_flagged(self):
+        """An input InVEST has switched off is not something the user can fix,
+        so complaining about it would be noise."""
+        marks = self._marks([[["lulc_alt_path"], "Input is required"]],
+                            {"lulc_alt_path": False})
+        self.assertEqual(marks, {})
+
+    def test_applicable_inputs_are_still_flagged(self):
+        marks = self._marks([[["lulc_alt_path"], "Input is required"]],
+                            {"lulc_alt_path": True})
+        self.assertIn("lulc_alt_path", marks)
+
+    def test_first_message_wins_for_a_repeated_key(self):
+        marks = self._marks(
+            [[["a"], "first"], [["a"], "second"]], {"a": True})
+        self.assertEqual(marks["a"], "first")
+
+    def test_malformed_entries_are_ignored(self):
+        self.assertEqual(self._marks(["nonsense", None], {}), {})
+
+    def test_no_warnings_means_no_marks(self):
+        self.assertEqual(self._marks([], {"a": True}), {})
+        self.assertEqual(self._marks(None, {}), {})
+
+
 class TestErrorHandling(unittest.TestCase):
 
     def test_unsupported_spec_raises(self):

@@ -175,11 +175,28 @@ def _vector_path(algorithm, parameters, name, context, feedback):
     return path
 
 
-def read_value(algorithm, plan, parameters, context, feedback):
+def _layer_source(algorithm, parameters, name, context):
+    """Return a layer's path without converting or copying anything.
+
+    Used for validation, where writing a temporary GeoPackage on every
+    keystroke would be unacceptable and InVEST only needs to see a path.
+    """
+    layer = algorithm.parameterAsLayer(parameters, name, context)
+    if layer is not None:
+        return layer.source()
+    return algorithm.parameterAsString(parameters, name, context)
+
+
+def read_value(algorithm, plan, parameters, context, feedback, materialise=True):
     """Return the value to place in InVEST's ``args`` for one parameter.
 
     Unset optional parameters yield an empty string, which is what InVEST
     expects for "not provided".
+
+    With ``materialise`` false, layer inputs are reported by their existing
+    source rather than being exported to a format InVEST can open, and
+    unusable layers are passed through instead of raising.  That makes the
+    call cheap and side-effect free, which is what live validation needs.
     """
     kind = plan["kind"]
     name = plan["name"]
@@ -196,8 +213,12 @@ def read_value(algorithm, plan, parameters, context, feedback):
         return ""
 
     if kind == "raster":
+        if not materialise:
+            return _layer_source(algorithm, parameters, name, context)
         return _raster_path(algorithm, parameters, name, context)
     if kind == "vector":
+        if not materialise:
+            return _layer_source(algorithm, parameters, name, context)
         return _vector_path(algorithm, parameters, name, context, feedback)
     if kind in ("file", "folder"):
         return algorithm.parameterAsFile(parameters, name, context)
@@ -210,7 +231,8 @@ def read_value(algorithm, plan, parameters, context, feedback):
     return algorithm.parameterAsString(parameters, name, context)
 
 
-def build_args(algorithm, plans, parameters, context, feedback, workspace=None):
+def build_args(algorithm, plans, parameters, context, feedback, workspace=None,
+               materialise=True):
     """Return the complete InVEST ``args`` dict for a run.
 
     Every key the model declares is included, because InVEST's validation
@@ -228,7 +250,7 @@ def build_args(algorithm, plans, parameters, context, feedback, workspace=None):
             args[plan["name"]] = workspace
             continue
         args[plan["name"]] = read_value(
-            algorithm, plan, parameters, context, feedback)
+            algorithm, plan, parameters, context, feedback, materialise)
     # Always run synchronously: spawning taskgraph worker processes from a
     # subprocess of QGIS is unreliable across platforms.
     args[paramspec.N_WORKERS] = paramspec.N_WORKERS_VALUE
